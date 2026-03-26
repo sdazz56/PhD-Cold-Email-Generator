@@ -421,8 +421,8 @@ if st.session_state.step == 0:
             "AI Model",
             [
                 "anthropic/claude-3-5-sonnet-20240620",
-                "gemini/gemini-1.5-pro",
-                "gemini/gemini-1.5-flash",
+                "gemini/gemini-1.5-pro-latest",
+                "gemini/gemini-1.5-flash-latest",
                 "kimi/moonshot-v1-8k",
                 "deepseek/deepseek-chat",
                 "qwen/qwen2.5",
