@@ -1,19 +1,42 @@
-# GitHub Setup TODO for PhD Cold Email Generator
+# Multi-LLM API Key Support - Implementation Plan Approved
 
-## Completed:
-- [x] Verified local git repo with remote origin: https://github.com/sdazz56/phd-cold-email-generator.git
-- [x] Checked git status: clean, up-to-date, nothing to commit
+## Current Status: Plan Approved (Keep Gemini + Anthropic + others via LiteLLM)
 
-## Next Steps:
-- [ ] Verify files on GitHub: `open https://github.com/sdazz56/phd-cold-email-generator`
-- [ ] (If needed) `git pull origin main` to sync latest
-- [ ] Deploy to Streamlit Cloud:
-  1. Go to https://share.streamlit.io → New app
-  2. Repo: sdazz56/phd-cold-email-generator, branch: main, file: app.py
-  3. Add secret: `ANTHROPIC_API_KEY=sk-ant-your-key-here`
-- [ ] Test locally: `pip install -r requirements.txt && streamlit run app.py`
+### Step 1: Update requirements ✓
+- [x] Added litellm>=1.44.7, google-generativeai>=0.8.3 to requirement.txt
+- [x] pip install -r requirement.txt
+
+### Step 2: Refactor app.py
+- [ ] Add Step 0: API Setup (model select + key input)
+- [ ] Abstract `get_client()` → `get_llm_client(model, api_key)`
+- [ ] `call_llm(model, prompt)` replaces `call_claude()`
+- [ ] LiteLLM for: kimi/moonshot-v1-8k, deepseek/deepseek-chat, qwen/Qwen2.5-7B-Instruct
+- [ ] Direct: anthropic/claude-3.5-sonnet, gemini/gemini-1.5-pro
+
+### Step 3: Test
+- [ ] Test all 5 models
+
+### Step 4: Deploy & Push
+
+**Next:** Refactor app.py
+
+### Step 2: Refactor app.py
+- [ ] Add Step 0: API Setup (model select + key input)
+- [ ] Abstract `get_client()` → `get_llm_client(model, api_key)`
+- [ ] `call_llm(model, prompt)` replaces `call_claude()`
+- [ ] LiteLLM for: kimi/moonshot-v1-8k, deepseek/deepseek-chat, qwen/Qwen2.5-7B-Instruct
+- [ ] Direct: anthropic/claude-3.5-sonnet, gemini/gemini-1.5-pro
+
+### Step 3: Test
+- [ ] Test all 5 models with sample inputs
+- [ ] Verify angle discovery + email gen
+
+### Step 4: Deploy & Push
+- [ ] Commit/push
+- [ ] Update Streamlit Cloud secrets
+
+**Next:** Implement Step 1 (requirements), then app.py refactor.
 
 ---
 
-*All git setup complete - repo is ready to push future changes with `git add . && git commit -m "update" && git push`*
-
+*Progress tracking for multi-LLM feature*
