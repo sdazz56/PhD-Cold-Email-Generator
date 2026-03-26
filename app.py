@@ -1,6 +1,6 @@
 import streamlit as st
 import anthropic
-import google.genai as genai
+import google.generativeai as genai
 import litellm
 import json
 import re
