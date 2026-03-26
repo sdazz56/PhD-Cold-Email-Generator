@@ -1,5 +1,7 @@
 import streamlit as st
 import anthropic
+import google.genai as genai
+import litellm
 import json
 import re
 
@@ -254,7 +256,9 @@ div[data-testid="stHorizontalBlock"] { gap: 16px; }
 
 # ─── Session state init ────────────────────────────────────────────────────────
 defaults = {
-    "step": 1,
+    "step": 0,
+    "api_model": "anthropic/claude-3-5-sonnet-20240620",
+    "api_key": "",
     "paper_title": "",
     "paper_authors": "",
     "paper_text": "",
@@ -284,21 +288,58 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
-def get_client():
-    try:
-        return anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
-    except Exception:
-        st.error("❌ ANTHROPIC_API_KEY not found in secrets. Add it in Streamlit Cloud → App settings → Secrets.")
-        st.stop()
+def get_llm(model_name, api_key):
+    """Get LLM client based on model and key."""
+    if model_name.startswith("anthropic/"):
+        try:
+            return anthropic.Anthropic(api_key=api_key)
+        except:
+            st.error("❌ Invalid Anthropic API key.")
+            st.stop()
+    elif model_name.startswith("gemini/"):
+        try:
+            genai.configure(api_key=api_key)
+            return genai.GenerativeModel(model_name.split("/")[-1])
+        except:
+            st.error("❌ Invalid Gemini API key.")
+            st.stop()
+    else:  # LiteLLM for Kimi, Deepseek, Qwen
+        litellm.api_key = api_key
+        litellm.model_mapping = {
+            "kimi/moonshot": "moonshot-v1-8k",
+            "deepseek/deepseek-chat": "deepseek/deepseek-chat",
+            "qwen/qwen2.5": "qwen/Qwen2.5-7B-Instruct",
+        }
+        return model_name
 
-def call_claude(prompt: str, max_tokens: int = 1500) -> str:
-    client = get_client()
-    message = client.messages.create(
-        model="claude-sonnet-4-5",
-        max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return message.content[0].text
+def call_llm(prompt: str, max_tokens: int = 1500) -> str:
+    model_name = st.session_state.api_model
+    api_key = st.session_state.api_key
+    if not api_key:
+        st.error("❌ Please set your API key in Step 0.")
+        st.stop()
+    
+    llm = get_llm(model_name, api_key)
+    
+    if model_name.startswith("anthropic/"):
+        client = llm
+        msg = client.messages.create(
+            model=model_name.split("/")[-1],
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return msg.content[0].text
+    elif model_name.startswith("gemini/"):
+        response = llm.generate_content(prompt, generation_config={"max_output_tokens": max_tokens})
+        return response.text
+    else:
+        # LiteLLM
+        response = litellm.completion(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content
 
 def go_to(step: int):
     st.session_state.step = step
@@ -326,9 +367,10 @@ def extract_email(raw: str) -> str:
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### 🧫 PhD Cold Email Generator")
-    st.markdown("*Microbiome · Germany · Claude Sonnet*")
+    st.markdown("*Multi-LLM Support · Microbiome · Germany*")
     st.divider()
 
+    # Main steps navigation (shifted by 1)
     steps_info = [
         ("Research Paper",      "Most critical input"),
         ("Focus / Angle",       "Gap or auto-discover"),
@@ -338,8 +380,9 @@ with st.sidebar:
     ]
     for i, (label, sub) in enumerate(steps_info, 1):
         current = st.session_state.step
-        status = "active" if i == current else ("done" if i < current else "")
-        bullet = "✓" if i < current else str(i)
+        step_num = i + 1
+        status = "active" if current == step_num else ("done" if current > step_num else "")
+        bullet = "✓" if current > step_num else str(step_num)
         st.markdown(f"""
         <div class="nav-item {status}">
             <div class="nav-bullet">{bullet}</div>
@@ -350,10 +393,10 @@ with st.sidebar:
         </div>""", unsafe_allow_html=True)
 
     st.divider()
-    st.markdown("""
+    st.markdown(f"""
     <div style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1);
          border-radius:8px; padding:12px 14px; font-size:12px; color:rgba(255,255,255,0.45); line-height:1.55;">
-    <strong style="color:#52b788;">Key rule:</strong> The email must feel like you didn't just read the abstract — you actually thought about the paper.
+    <strong style="color:#52b788;">Using:</strong> {st.session_state.api_model.split('/')[0].title()}
     </div>""", unsafe_allow_html=True)
 
     if st.session_state.step > 1:
@@ -362,6 +405,53 @@ with st.sidebar:
             for k, v in defaults.items():
                 st.session_state[k] = v
             st.rerun()
+
+# ─── STEP 0: API Setup ────────────────────────────────────────────────────────
+if st.session_state.step == 0:
+    st.markdown("""
+    <div class="step-header">
+        <div class="step-eyebrow">Step 00 — API Setup</div>
+        <div class="step-title">Choose Your <em>AI Model</em> & Key</div>
+        <div class="step-desc">Enter your API key to unlock generation. Keys persist during session.</div>
+    </div>""", unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.session_state.api_model = st.selectbox(
+            "AI Model",
+            [
+                "anthropic/claude-3-5-sonnet-20240620",
+                "gemini/gemini-1.5-pro",
+                "gemini/gemini-1.5-flash",
+                "kimi/moonshot-v1-8k",
+                "deepseek/deepseek-chat",
+                "qwen/qwen2.5",
+            ],
+            index=0,
+        )
+    with col2:
+        st.session_state.api_key = st.text_input(
+            "API Key",
+            value=st.session_state.api_key,
+            type="password",
+            help="Get from: Anthropic, Google AI Studio, Kimi.ai, Deepseek, Alibaba Qwen",
+        )
+
+    st.markdown("""
+    <div class="callout-green">
+    🔑 <strong>Quick Setup:</strong><br>
+    • Anthropic: console.anthropic.com<br>
+    • Gemini: aistudio.google.com/app/apikey<br>
+    • Kimi/Deepseek/Qwen: platform.kimi.ai / platform.deepseek.com / dashscope.aliyun.com
+    </div>""", unsafe_allow_html=True)
+
+    if st.button("✅ API Ready — Start!", type="primary"):
+        if st.session_state.api_key.strip():
+            st.session_state.step = 1
+            st.success("API configured!")
+            st.rerun()
+        else:
+            st.error("⚠️ Enter your API key.")
 
 # ─── STEP 1: Paper ────────────────────────────────────────────────────────────
 if st.session_state.step == 1:
@@ -507,7 +597,7 @@ Return ONLY valid JSON — no preamble, no markdown fences:
   ]
 }}"""
                     try:
-                        raw = call_claude(prompt, max_tokens=1200)
+                        raw = call_llm(prompt, max_tokens=1200)
                         clean = raw.replace("```json", "").replace("```", "").strip()
                         parsed = json.loads(clean)
                         st.session_state.angles = parsed.get("angles", [])
@@ -845,7 +935,7 @@ Subject: Prospective {deg} Applicant — {st.session_state.start_date or '[your 
 
                 with st.spinner("Composing your email — applying scientific depth and human tone..."):
                     try:
-                        raw = call_claude(prompt, max_tokens=1500)
+                        raw = call_llm(prompt, max_tokens=1500)
                         st.session_state.generated_email = extract_email(raw)
                         st.session_state.scores          = parse_scores(raw)
                         go_to(5)
