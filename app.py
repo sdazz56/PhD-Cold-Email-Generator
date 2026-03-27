@@ -1,9 +1,58 @@
 import streamlit as st
-import anthropic
-import google.generativeai as genai
-import litellm
 import json
-import re
+
+try:
+    import litellm
+except ImportError as e:
+    st.error(f"❌ Missing dependency: `{e.name}`\n\nPlease run: `pip install -r requirements.txt` or ensure you have selected the correct virtual environment in your IDE.")
+    st.stop()
+
+# Modular imports
+from src.styles import apply_custom_css
+from src.utils import go_to, parse_scores, extract_email, sanitize
+from src.llm import call_llm
+from src.prompts import get_angle_discovery_prompt, get_email_generation_prompt
+
+# ─── Provider Configuration ────────────────────────────────────────────────────────
+PROVIDERS = {
+    "Gemini": {
+        "models": [
+            {"id": "gemini/gemini-1.5-flash", "label": "Gemini 1.5 Flash (fastest)"},
+            {"id": "gemini/gemini-1.5-pro", "label": "Gemini 1.5 Pro (smartest)"},
+            {"id": "gemini/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (best)"},
+            {"id": "gemini/gemini-3-flash-preview", "label": "Gemini 3.0 Flash (fast)"},
+            {"id": "gemini/gemini-flash-lite-latest", "label": "Gemini Flash Lite (cheap)"}
+        ],
+        "placeholder": "AIza... — Google AI Studio key"
+    },
+    "OpenAI": {
+        "models": [
+            {"id": "openai/gpt-5.4-2026-03-05", "label": "GPT-5.4 (best)"},
+            {"id": "openai/gpt-5.4-mini-2026-03-17", "label": "GPT-5.4 mini (fast)"},
+            {"id": "openai/gpt-5.4-nano-2026-03-17", "label": "GPT-5.4 nano (fast)"},
+            {"id": "openai/gpt-4o", "label": "GPT-4o (legacy best)"}
+        ],
+        "placeholder": "sk-... — OpenAI API key"
+    },
+    "Anthropic": {
+        "models": [
+            {"id": "anthropic/claude-3-5-sonnet-20240620", "label": "Claude 3.5 Sonnet (balanced)"},
+            {"id": "anthropic/claude-opus-4-6", "label": "Claude Opus 4 (best)"},
+            {"id": "anthropic/claude-sonnet-4-6", "label": "Claude Sonnet 4 (balanced)"},
+            {"id": "anthropic/claude-haiku-4-5-20251001", "label": "Claude Haiku 4 (fast)"}
+        ],
+        "placeholder": "sk-ant-... — Anthropic API key"
+    },
+    "Other": {
+        "models": [
+            {"id": "deepseek-chat", "label": "Deepseek Chat (V3)"},
+            {"id": "qwen2.5-7b-instruct", "label": "Qwen 2.5 7B"},
+            {"id": "moonshot-v1-8k", "label": "Moonshot V1"},
+            {"id": "Manual Entry", "label": "Manual Entry..."}
+        ],
+        "placeholder": "Your API Key"
+    }
+}
 
 # ─── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -14,254 +63,23 @@ st.set_page_config(
 )
 
 # ─── Custom CSS ────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
-
-html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
-}
-
-/* Sidebar */
-[data-testid="stSidebar"] {
-    background: #1a1916 !important;
-}
-[data-testid="stSidebar"] * {
-    color: rgba(255,255,255,0.85) !important;
-}
-[data-testid="stSidebar"] .stMarkdown p {
-    color: rgba(255,255,255,0.55) !important;
-    font-size: 12px !important;
-}
-
-/* Main background */
-.stApp { background: #f6f4ef; }
-
-/* Headers */
-h1, h2, h3 {
-    font-family: 'Instrument Serif', serif !important;
-    font-weight: 400 !important;
-}
-
-/* Step header */
-.step-header {
-    background: white;
-    border: 1px solid #ddd8cc;
-    border-radius: 10px;
-    padding: 20px 24px;
-    margin-bottom: 20px;
-    box-shadow: 0 2px 12px rgba(26,25,22,0.06);
-}
-.step-eyebrow {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: #2d6a4f;
-    margin-bottom: 4px;
-}
-.step-title {
-    font-family: 'Instrument Serif', serif;
-    font-size: 28px;
-    color: #1a1916;
-    margin: 0;
-    line-height: 1.15;
-}
-.step-title em { color: #2d6a4f; font-style: italic; }
-.step-desc { color: #706a5c; font-size: 14px; margin-top: 6px; font-weight: 300; }
-
-/* Cards */
-.info-card {
-    background: white;
-    border: 1px solid #ddd8cc;
-    border-radius: 10px;
-    padding: 20px 22px;
-    margin-bottom: 16px;
-    box-shadow: 0 2px 8px rgba(26,25,22,0.05);
-}
-
-/* Callouts */
-.callout-green {
-    background: rgba(45,106,79,0.06);
-    border: 1px solid rgba(45,106,79,0.2);
-    border-left: 3px solid #2d6a4f;
-    border-radius: 7px;
-    padding: 11px 14px;
-    font-size: 13px;
-    color: #706a5c;
-    margin: 12px 0;
-    line-height: 1.55;
-}
-.callout-amber {
-    background: #fef3c7;
-    border: 1px solid rgba(154,107,0,0.25);
-    border-left: 3px solid #9a6b00;
-    border-radius: 7px;
-    padding: 11px 14px;
-    font-size: 13px;
-    color: #78510a;
-    margin: 12px 0;
-}
-
-/* Angle cards */
-.angle-card {
-    background: white;
-    border: 2px solid #ddd8cc;
-    border-radius: 10px;
-    padding: 18px 20px;
-    margin-bottom: 12px;
-    transition: border-color 0.2s;
-}
-.angle-card.selected {
-    border-color: #2d6a4f;
-    background: rgba(45,106,79,0.02);
-}
-.angle-headline { font-weight: 600; font-size: 15px; color: #1a1916; margin-bottom: 6px; }
-.angle-body { font-size: 13px; color: #706a5c; line-height: 1.6; margin-bottom: 10px; }
-.angle-question { font-size: 13px; color: #1a1916; font-style: italic; margin-bottom: 10px; }
-.tag {
-    display: inline-block;
-    font-size: 11px;
-    padding: 3px 9px;
-    border-radius: 4px;
-    margin-right: 6px;
-    font-weight: 500;
-}
-.tag-metabolite { background: #fef3c7; color: #9a6b00; border: 1px solid rgba(154,107,0,0.3); }
-.tag-microbe { background: #d8f3dc; color: #2d6a4f; border: 1px solid rgba(45,106,79,0.3); }
-.tag-pathway { background: #fde8e8; color: #9b2226; border: 1px solid rgba(155,34,38,0.3); }
-
-/* Score badges */
-.scores-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
-.score-badge {
-    background: white;
-    border: 1px solid #ddd8cc;
-    border-radius: 8px;
-    padding: 10px 16px;
-    text-align: center;
-    min-width: 90px;
-}
-.score-val { font-size: 22px; font-weight: 600; color: #2d6a4f; font-family: monospace; }
-.score-lbl { font-size: 10px; color: #706a5c; text-transform: uppercase; letter-spacing: 0.07em; }
-
-/* Email output */
-.email-output {
-    background: white;
-    border: 1px solid #ddd8cc;
-    border-radius: 10px;
-    overflow: hidden;
-    box-shadow: 0 4px 20px rgba(26,25,22,0.08);
-}
-.email-bar {
-    background: #1a1916;
-    padding: 14px 22px;
-    color: rgba(255,255,255,0.9);
-    font-family: 'Instrument Serif', serif;
-    font-style: italic;
-    font-size: 15px;
-}
-.email-body {
-    padding: 28px 32px;
-    font-size: 14px;
-    line-height: 1.9;
-    color: #1a1916;
-    font-weight: 300;
-    white-space: pre-wrap;
-    word-break: break-word;
-}
-.email-footer {
-    background: #f0ede6;
-    border-top: 1px solid #ddd8cc;
-    padding: 12px 22px;
-    font-size: 12px;
-    color: #706a5c;
-}
-
-/* Progress steps in sidebar */
-.nav-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 0;
-    opacity: 0.45;
-}
-.nav-item.active { opacity: 1; }
-.nav-item.done { opacity: 0.7; }
-.nav-bullet {
-    width: 24px; height: 24px;
-    border-radius: 50%;
-    border: 1.5px solid rgba(255,255,255,0.25);
-    color: rgba(255,255,255,0.5);
-    font-size: 11px;
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0;
-    font-family: monospace;
-}
-.nav-item.active .nav-bullet {
-    border-color: #52b788;
-    color: #52b788;
-}
-.nav-item.done .nav-bullet {
-    background: #52b788;
-    border-color: #52b788;
-    color: #1a1916;
-}
-.nav-label { font-size: 12px; font-weight: 500; }
-.nav-sub { font-size: 10px; color: rgba(255,255,255,0.35) !important; }
-
-/* Streamlit overrides */
-.stTextInput > label, .stTextArea > label, .stSelectbox > label {
-    font-size: 11.5px !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.07em !important;
-    text-transform: uppercase !important;
-    color: #706a5c !important;
-}
-.stTextInput > div > div > input,
-.stTextArea > div > div > textarea {
-    background: #f6f4ef !important;
-    border: 1.5px solid #ddd8cc !important;
-    border-radius: 8px !important;
-    font-family: 'DM Sans', sans-serif !important;
-}
-.stTextInput > div > div > input:focus,
-.stTextArea > div > div > textarea:focus {
-    border-color: #2d6a4f !important;
-    box-shadow: 0 0 0 3px rgba(45,106,79,0.1) !important;
-}
-.stButton > button {
-    background: #1a1916 !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 8px !important;
-    font-family: 'DM Sans', sans-serif !important;
-    font-weight: 500 !important;
-    padding: 10px 22px !important;
-    transition: all 0.2s !important;
-}
-.stButton > button:hover {
-    background: #2d6a4f !important;
-    transform: translateY(-1px) !important;
-}
-.stRadio > label {
-    font-size: 11.5px !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.07em !important;
-    text-transform: uppercase !important;
-    color: #706a5c !important;
-}
-div[data-testid="stHorizontalBlock"] { gap: 16px; }
-</style>
-""", unsafe_allow_html=True)
+apply_custom_css()
 
 # ─── Session state init ────────────────────────────────────────────────────────
 defaults = {
     "step": 0,
     "api_model": "anthropic/claude-3-5-sonnet-20240620",
     "api_key": "",
+    "provider_keys": {
+        "Gemini": "",
+        "OpenAI": "",
+        "Anthropic": "",
+        "Other": ""
+    },
     "paper_title": "",
     "paper_authors": "",
     "paper_text": "",
+    "paper_field": "Academic",
     "focus_mode": "Auto-Discover",
     "angles": [],
     "selected_angle_idx": 0,
@@ -286,83 +104,6 @@ defaults = {
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
-
-# ─── Helpers ──────────────────────────────────────────────────────────────────
-def get_llm(model_name, api_key):
-    """Get LLM client based on model and key."""
-    if model_name.startswith("anthropic/"):
-        try:
-            return anthropic.Anthropic(api_key=api_key)
-        except:
-            st.error("❌ Invalid Anthropic API key.")
-            st.stop()
-    elif model_name.startswith("gemini/"):
-        try:
-            genai.configure(api_key=api_key)
-            return genai.GenerativeModel(model_name.split("/")[-1])
-        except:
-            st.error("❌ Invalid Gemini API key.")
-            st.stop()
-    else:  # LiteLLM for Kimi, Deepseek, Qwen
-        litellm.api_key = api_key
-        litellm.model_mapping = {
-            "kimi/moonshot": "moonshot-v1-8k",
-            "deepseek/deepseek-chat": "deepseek/deepseek-chat",
-            "qwen/qwen2.5": "qwen/Qwen2.5-7B-Instruct",
-        }
-        return model_name
-
-def call_llm(prompt: str, max_tokens: int = 1500) -> str:
-    model_name = st.session_state.api_model
-    api_key = st.session_state.api_key
-    if not api_key:
-        st.error("❌ Please set your API key in Step 0.")
-        st.stop()
-    
-    llm = get_llm(model_name, api_key)
-    
-    if model_name.startswith("anthropic/"):
-        client = llm
-        msg = client.messages.create(
-            model=model_name.split("/")[-1],
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return msg.content[0].text
-    elif model_name.startswith("gemini/"):
-        response = llm.generate_content(prompt, generation_config={"max_output_tokens": max_tokens})
-        return response.text
-    else:
-        # LiteLLM
-        response = litellm.completion(
-            model=model_name,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-        )
-        return response.choices[0].message.content
-
-def go_to(step: int):
-    st.session_state.step = step
-
-def parse_scores(raw: str) -> dict:
-    m = re.search(
-        r"SCORES:\s*depth=(\d+)/10,\s*tone=(\d+)/10,\s*specificity=(\d+)/10,\s*originality=(\d+)/10",
-        raw, re.IGNORECASE
-    )
-    if m:
-        return {
-            "Paper Depth": int(m.group(1)),
-            "Human Tone":  int(m.group(2)),
-            "Specificity": int(m.group(3)),
-            "Originality": int(m.group(4)),
-        }
-    return {}
-
-def extract_email(raw: str) -> str:
-    if "---EMAIL---" in raw:
-        return raw.split("---EMAIL---", 1)[1].strip()
-    # Fallback: strip score line
-    return re.sub(r"SCORES:.*\n?", "", raw, flags=re.IGNORECASE).strip()
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -411,47 +152,89 @@ if st.session_state.step == 0:
     st.markdown("""
     <div class="step-header">
         <div class="step-eyebrow">Step 00 — API Setup</div>
-        <div class="step-title">Choose Your <em>AI Model</em> & Key</div>
-        <div class="step-desc">Enter your API key to unlock generation. Keys persist during session.</div>
+        <div class="step-title">Choose Your <em>AI Provider</em> & Model</div>
+        <div class="step-desc">Select your preferred AI engine to unlock generation.</div>
     </div>""", unsafe_allow_html=True)
 
+
+    # Provider Selection (Radio styled as tabs)
+    provider_names = list(PROVIDERS.keys())
+    selected_provider = st.radio(
+        "Select Provider",
+        provider_names,
+        horizontal=True,
+        label_visibility="collapsed"
+    )
+
+    # UI for Selected Provider
+    p_data = PROVIDERS[selected_provider]
+    p_models = p_data.get("models", [])
+    
     col1, col2 = st.columns(2)
     with col1:
-        st.session_state.api_model = st.selectbox(
-            "AI Model",
-            [
-                "anthropic/claude-3-5-sonnet-20240620",
-                "gemini/gemini-1.5-pro-latest",
-                "gemini/gemini-1.5-flash-latest",
-                "kimi/moonshot-v1-8k",
-                "deepseek/deepseek-chat",
-                "qwen/qwen2.5",
-            ],
+        model_labels = []
+        model_ids = []
+        for model_item in p_models:
+            if isinstance(model_item, dict):
+                model_labels.append(model_item.get("label", "Unknown"))
+                model_ids.append(model_item.get("id", "Manual"))
+        
+        selected_label = st.selectbox(
+            f"{selected_provider} Model",
+            model_labels,
             index=0,
+            help=f"Choose the engine from {selected_provider}"
         )
+        
+        # Get matching ID
+        idx = model_labels.index(selected_label)
+        target_id = model_ids[idx]
+        if target_id == "Manual Entry":
+            target_id = st.text_input("Enter Model Name (e.g. together/llama-3)", placeholder="provider/model-name")
+        
+        st.session_state.api_model = target_id
+
     with col2:
-        st.session_state.api_key = st.text_input(
-            "API Key",
-            value=st.session_state.api_key,
+        # Load the key for this provider from session state if it exists
+        current_key = st.session_state.provider_keys.get(selected_provider, "")
+        
+        new_key = st.text_input(
+            f"{selected_provider} API Key",
+            value=current_key,
             type="password",
-            help="Get from: Anthropic, Google AI Studio, Kimi.ai, Deepseek, Alibaba Qwen",
+            placeholder=p_data.get("placeholder", ""),
+            help=f"Enter your {selected_provider} API key"
         )
+        # Update session state
+        st.session_state.provider_keys[selected_provider] = new_key
+        st.session_state.api_key = new_key
 
     st.markdown("""
     <div class="callout-green">
-    🔑 <strong>Quick Setup:</strong><br>
-    • Anthropic: console.anthropic.com<br>
-    • Gemini: aistudio.google.com/app/apikey<br>
-    • Kimi/Deepseek/Qwen: platform.kimi.ai / platform.deepseek.com / dashscope.aliyun.com
+    🔑 <strong>API Keys stay with you.</strong> Keys are used locally for this session and not stored permanently on any server.
     </div>""", unsafe_allow_html=True)
 
-    if st.button("✅ API Ready — Start!", type="primary"):
-        if st.session_state.api_key.strip():
-            st.session_state.step = 1
-            st.success("API configured!")
-            st.rerun()
+    if st.button("✅ Verify & Start!", type="primary", use_container_width=True):
+        if not st.session_state.api_key.strip():
+            st.error("⚠️ Please enter your API key to continue.")
         else:
-            st.error("⚠️ Enter your API key.")
+            with st.spinner("Verifying connection... (usually 2-5 seconds)"):
+                try:
+                    # Unified verification call
+                    test_prompt = "Hello, respond with 'OK'."
+                    call_llm(test_prompt, max_tokens=10)
+                    
+                    st.session_state.step = 1
+                    st.success("✅ Connection successful!")
+                    st.rerun()
+                except Exception as e:
+                    err_msg = str(e).lower()
+                    if "401" in err_msg or "invalid_api_key" in err_msg or "invalid key" in err_msg:
+                        st.error("❌ Invalid API Key. Please verify and try again.")
+                    elif "quota" in err_msg or "exhausted" in err_msg or "429" in err_msg:
+                        st.error("❌ Quota Exhausted. Check your billing dashboard.")
+                    else:
+                        st.error(f"❌ Connection Failed: {str(e)}")
 
 # ─── STEP 1: Paper ────────────────────────────────────────────────────────────
 if st.session_state.step == 1:
@@ -520,8 +303,8 @@ if st.session_state.step == 1:
     if st.button("Continue to Focus Selection →", type="primary"):
         if not st.session_state.paper_title.strip():
             st.error("⚠ Please enter the paper title.")
-        elif len(st.session_state.paper_text.strip()) < 100:
-            st.error("⚠ Please paste more paper content — at least the abstract and key findings.")
+        elif len(st.session_state.paper_text.strip().split()) < 300:
+            st.error("⚠ Please paste more paper content — at least 300 words (abstract and key findings).")
         else:
             go_to(2)
             st.rerun()
@@ -562,40 +345,23 @@ elif st.session_state.step == 2:
         col_a, col_b = st.columns([2, 3])
         with col_a:
             if st.button("🔬 Analyse Paper & Discover Angles", type="primary"):
-                with st.spinner("Analysing paper — extracting mechanisms and gaps..."):
-                    prompt = f"""You are an expert microbiome researcher. Carefully read this research paper and extract 3 distinct, highly specific research angles that a PhD applicant could use as the focus of a cold email.
+                with st.spinner("Identifying research field and extracting angles... (30-60s)"):
+                    # Phase 1: Identify Field (Quick call)
+                    field_prompt = f"Identify the primary scientific field of this research paper in 2-3 words (e.g. 'Microbiology', 'Computer Science', 'Materials Science').\n\nTITLE: {st.session_state.paper_title}\n\nCONTENT: {st.session_state.paper_text[:2000]}"
+                    try:
+                        detected_field = call_llm(field_prompt, max_tokens=10).strip().replace("'", "").replace('"', "")
+                        st.session_state.paper_field = detected_field
+                    except:
+                        st.session_state.paper_field = "Academic"
 
-PAPER TITLE: {st.session_state.paper_title}
-{f"AUTHORS/JOURNAL: {st.session_state.paper_authors}" if st.session_state.paper_authors else ""}
-
-PAPER CONTENT:
-{st.session_state.paper_text}
-
-{f"APPLICANT CV (for relevance ranking):{chr(10)}{st.session_state.cv_brief}" if st.session_state.cv_brief else ""}
-
-For each angle extract:
-1. A short compelling headline (max 12 words)
-2. A 2-3 sentence description of the specific insight or gap
-3. The key metabolite(s) involved
-4. The key microbial genus/species
-5. The relevant pathway or gene
-6. Why this is still unclear (the gap)
-7. A precise research question (1 sentence, must include metabolite + microbe + pathway/gene)
-
-Return ONLY valid JSON — no preamble, no markdown fences:
-{{
-  "angles": [
-    {{
-      "headline": "...",
-      "description": "...",
-      "metabolite": "...",
-      "microbe": "...",
-      "pathway": "...",
-      "gap": "...",
-      "question": "..."
-    }}
-  ]
-}}"""
+                    # Phase 2: Discover Angles
+                    prompt = get_angle_discovery_prompt(
+                        st.session_state.paper_title,
+                        st.session_state.paper_authors,
+                        st.session_state.paper_text,
+                        st.session_state.cv_brief,
+                        field=st.session_state.paper_field
+                    )
                     try:
                         raw = call_llm(prompt, max_tokens=1200)
                         clean = raw.replace("```json", "").replace("```", "").strip()
@@ -604,11 +370,14 @@ Return ONLY valid JSON — no preamble, no markdown fences:
                         st.session_state.selected_angle_idx = 0
                         st.rerun()
                     except Exception as e:
-                        st.error(f"❌ Analysis failed: {e}. Try adding more paper content.")
+                        st.error(f"❌ Analysis failed: {str(e)}")
+                        st.rerun()
 
         # Show angles
         if st.session_state.angles:
-            st.markdown("#### Select a Research Angle")
+            # Use detected field if available, else derive
+            field = st.session_state.paper_field or "Academic"
+            st.markdown(f"#### Select a Research Angle (Field: {sanitize(field)})")
             st.markdown("*Pick the angle you want to build the email around.*")
 
             for i, a in enumerate(st.session_state.angles):
@@ -621,15 +390,15 @@ Return ONLY valid JSON — no preamble, no markdown fences:
                          text-transform:uppercase; color:#2d6a4f; margin-bottom:6px;">
                         Angle {i+1}
                     </div>
-                    <div class="angle-headline">{a['headline']}</div>
-                    <div class="angle-body">{a['description']}</div>
+                    <div class="angle-headline">{sanitize(a['headline'])}</div>
+                    <div class="angle-body">{sanitize(a['description'])}</div>
                     <div style="font-size:12px; color:#706a5c; margin-bottom:6px;">
-                        <strong style="color:#1a1916;">Gap:</strong> {a['gap']}
+                        <strong style="color:#1a1916;">Gap:</strong> {sanitize(a['gap'])}
                     </div>
-                    <div class="angle-question">❓ {a['question']}</div>
-                    <span class="tag tag-metabolite">⚗ {a['metabolite']}</span>
-                    <span class="tag tag-microbe">🦠 {a['microbe']}</span>
-                    <span class="tag tag-pathway">🔬 {a['pathway']}</span>
+                    <div class="angle-question">❓ {sanitize(a['question'])}</div>
+                    <span class="tag tag-metabolite">⚗ {sanitize(a['metabolite'])}</span>
+                    <span class="tag tag-microbe">🦠 {sanitize(a['microbe'])}</span>
+                    <span class="tag tag-pathway">🔬 {sanitize(a['pathway'])}</span>
                 </div>""", unsafe_allow_html=True)
 
                 if not selected:
@@ -652,11 +421,11 @@ Return ONLY valid JSON — no preamble, no markdown fences:
                     go_to(3)
                     st.rerun()
             with col2:
-                if st.button("← Back to Paper"):
+                if st.button("← Back to Paper", key="back_to_paper_1"):
                     go_to(1)
                     st.rerun()
         else:
-            if st.button("← Back to Paper"):
+            if st.button("← Back to Paper", key="back_to_paper_2"):
                 go_to(1)
                 st.rerun()
 
@@ -673,11 +442,7 @@ Return ONLY valid JSON — no preamble, no markdown fences:
             manual_focus = st.text_area(
                 "What specific finding, mechanism or gap are you focusing on?",
                 height=120,
-                placeholder=(
-                    "e.g. The paper showed that butyrate produced by Faecalibacterium prausnitzii "
-                    "activates GPR109A to suppress NF-κB. I want to explore whether this extends "
-                    "to SCFA cross-talk with the TLR4 pathway in IBD patients, which wasn't addressed."
-                )
+                placeholder="e.g. Describe the mechanism, metabolite, and microbe focus..."
             )
             metabolite = st.text_input("Key Metabolite(s)", placeholder="e.g. butyrate, propionate")
             microbe    = st.text_input("Key Microbe(s)", placeholder="e.g. Faecalibacterium prausnitzii")
@@ -688,10 +453,7 @@ Return ONLY valid JSON — no preamble, no markdown fences:
             question  = st.text_area(
                 "Research Question to Pose",
                 height=120,
-                placeholder=(
-                    "e.g. Does butyrate-mediated GPR109A activation modulate TLR4 signalling "
-                    "in inflamed colonic epithelium, and can this be recapitulated in anaerobic co-culture models?"
-                )
+                placeholder="e.g. Does X modulate Y in Z model?"
             )
 
         st.divider()
@@ -713,7 +475,7 @@ Return ONLY valid JSON — no preamble, no markdown fences:
                     go_to(3)
                     st.rerun()
         with col_b:
-            if st.button("← Back to Paper"):
+            if st.button("← Back to Paper", key="back_to_paper_manual"):
                 go_to(1)
                 st.rerun()
 
@@ -740,17 +502,7 @@ elif st.session_state.step == 3:
         "CV — Paste Key Points *",
         value=st.session_state.user_cv,
         height=260,
-        placeholder=(
-            "Paste your most relevant experience, projects, and skills here.\n\n"
-            "Example:\n\n"
-            "Experience:\n"
-            "- Probiotic R&D, BioCompany GmbH (2022–2024): strain characterisation,\n"
-            "  fermentation optimisation, microbiome-host interaction assays\n"
-            "- MSc Thesis: Lactobacillus reuteri adhesion and TLR2 modulation in Caco-2 cells\n\n"
-            "Lab Skills: RT-PCR, HPLC, LC-MS (basic), anaerobic fermentation,\n"
-            "flow cytometry, ELISA, 16S amplicon sequencing\n\n"
-            "Publications / Presentations: [list if any]"
-        )
+        placeholder="Paste your most relevant experience, projects, and skills here."
     )
 
     st.markdown("""
@@ -775,7 +527,7 @@ elif st.session_state.step == 3:
                 go_to(4)
                 st.rerun()
     with col_b:
-        if st.button("← Back"):
+        if st.button("← Back", key="back_to_focus"):
             go_to(2)
             st.rerun()
 
@@ -800,7 +552,7 @@ elif st.session_state.step == 4:
         "Lab's Broader Research Focus (optional — helps personalise)",
         value=st.session_state.prof_focus,
         height=80,
-        placeholder="e.g. Gut microbiome-immune crosstalk, IBD mechanisms, metabolomics, epithelial barrier function..."
+        placeholder="e.g. Gut microbiome-immune crosstalk, IBD mechanisms..."
     )
 
     deg = st.radio(
@@ -826,114 +578,46 @@ elif st.session_state.step == 4:
 SELECTED RESEARCH ANGLE:
 - Headline: {f['headline']}
 - Description: {f['description']}
-- Key metabolite: {f['metabolite']}
-- Key microbe: {f['microbe']}
-- Pathway/gene: {f['pathway']}
+- Key molecule: {f['metabolite']}
+- Key subject: {f['microbe']}
+- Pathway/mechanism: {f['pathway']}
 - Research gap: {f['gap']}
-- Research question to pose: {f['question']}"""
+- Research question: {f['question']}"""
                 elif f and f["type"] == "manual":
                     focus_block = f"""
 APPLICANT'S SPECIFIC FOCUS:
 {f['description']}
-- Key metabolite: {f.get('metabolite') or 'derive from paper'}
-- Key microbe: {f.get('microbe') or 'derive from paper'}
-- Pathway/gene: {f.get('pathway') or 'derive from paper'}
+- Key molecule: {f.get('metabolite') or 'derive from paper'}
+- Key subject: {f.get('microbe') or 'derive from paper'}
+- Pathway/mechanism: {f.get('pathway') or 'derive from paper'}
 - Proposed technique: {f.get('technique') or 'to be specified'}
 - Research question: {f.get('question') or 'construct from above'}"""
                 else:
-                    focus_block = "No specific focus provided — extract the most compelling angle from the paper."
+                    focus_block = "No specific focus provided."
 
-                prompt = f"""🎯 ROLE
-You are an expert microbiome researcher + academic writer + PhD evaluator in Germany.
-Write a highly targeted, human-sounding cold email for a {deg} application in gut microbiome research.
+                prompt = get_email_generation_prompt(
+                    deg,
+                    {
+                        "paper_title": st.session_state.paper_title,
+                        "paper_authors": st.session_state.paper_authors,
+                        "paper_text": st.session_state.paper_text,
+                        "prof_name": st.session_state.prof_name,
+                        "prof_univ": st.session_state.prof_univ,
+                        "prof_lab": st.session_state.prof_lab,
+                        "prof_focus": st.session_state.prof_focus,
+                        "user_name": st.session_state.user_name,
+                        "user_email": st.session_state.user_email,
+                        "user_degree": st.session_state.user_degree,
+                        "user_institute": st.session_state.user_institute,
+                        "user_country": st.session_state.user_country,
+                        "user_cv": st.session_state.user_cv,
+                        "start_date": st.session_state.start_date,
+                    },
+                    focus_block,
+                    field=st.session_state.paper_field
+                )
 
-🎮 GOAL
-The professor must feel: "This person actually read my paper carefully and thought about it like a researcher."
-If the email sounds generic, templated, or robotic → FAILED.
-
-📥 INPUTS
-
-PAPER:
-Title: {st.session_state.paper_title}
-{f"Authors/Journal: {st.session_state.paper_authors}" if st.session_state.paper_authors else ""}
-Content:
-{st.session_state.paper_text}
-
-{focus_block}
-
-PROFESSOR:
-Name: {st.session_state.prof_name}
-University: {st.session_state.prof_univ or 'Germany'}
-{f"Lab/Department: {st.session_state.prof_lab}" if st.session_state.prof_lab else ""}
-{f"Research Focus: {st.session_state.prof_focus}" if st.session_state.prof_focus else ""}
-
-APPLICANT:
-Name: {st.session_state.user_name}
-{f"Email: {st.session_state.user_email}" if st.session_state.user_email else ""}
-Degree: {st.session_state.user_degree} from {st.session_state.user_institute}
-{f"Country: {st.session_state.user_country}" if st.session_state.user_country else ""}
-CV/Background:
-{st.session_state.user_cv}
-{f"Intended Start: {st.session_state.start_date}" if st.session_state.start_date else ""}
-
-🧩 MANDATORY STRUCTURE
-
-1. INTRODUCTION (3–4 natural lines)
-   - Who I am ({st.session_state.user_degree})
-   - My focus (gut microbiome, host interaction)
-   - Tone: natural, not stiff
-
-2. PAPER ENGAGEMENT (MOST IMPORTANT — do NOT summarize, engage deeply)
-   - Reference the specific paper by title
-   - Extract a specific biological insight or mechanism
-   - Use exact: metabolite + microbial genus/species + pathway/gene from the selected focus
-   - Add natural scientific curiosity: "What I found particularly interesting was..."
-   - Show you understood WHY the result matters and what remains unclear
-
-3. RESEARCH GAP + PRECISE QUESTION
-   - Identify a real gap or unclear mechanism from the paper
-   - Pose a precise scientific question that MUST include:
-     • 1 specific metabolite
-     • 1 microbial genus/species
-     • 1 pathway or gene
-
-4. PROPOSED RESEARCH IDEA (mini direction)
-   - Suggest a specific, realistic approach
-   - Include: experimental method + pathway/gene focus + expected insight
-   - Keep realistic, not overambitious
-
-5. MY EXPERIENCE (tightly connected to the idea above — NOT a generic list)
-   - Use ONLY information from the CV provided
-   - Directly connect specific skills/experience to the proposed idea
-
-6. CLOSING (simple, human, short)
-   - Express interest in {deg}
-   - Ask for a brief discussion
-   - Polite and short
-
-🗣️ HUMAN TONE RULES
-- Write like a real person
-- NO: "This study demonstrates a significant association", "passionate", "cutting-edge"
-- YES: "What I found particularly interesting was...", natural transitions, varied sentence length
-- Max 300–350 words total
-
-🧪 SCIENTIFIC DEPTH (mandatory)
-Must include: ≥1 metabolite · ≥1 microbe · ≥1 pathway/gene · ≥1 experimental technique
-
-🎯 SELF-CHECK — score each before outputting (refine if any < 8):
-• Depth of paper usage: /10
-• Human tone: /10
-• Specificity: /10
-• Original thinking: /10
-
-OUTPUT FORMAT (exactly):
-SCORES: depth=X/10, tone=X/10, specificity=X/10, originality=X/10
----EMAIL---
-Subject: Prospective {deg} Applicant — {st.session_state.start_date or '[your intended session]'}
-
-[Email body — no headings, no explanation]"""
-
-                with st.spinner("Composing your email — applying scientific depth and human tone..."):
+                with st.spinner("Composing your email — applying scientific depth... (30-60s)"):
                     try:
                         raw = call_llm(prompt, max_tokens=1500)
                         st.session_state.generated_email = extract_email(raw)
@@ -941,10 +625,11 @@ Subject: Prospective {deg} Applicant — {st.session_state.start_date or '[your 
                         go_to(5)
                         st.rerun()
                     except Exception as e:
-                        st.error(f"❌ Generation failed: {e}")
+                        st.error(f"❌ Generation failed: {str(e)}")
+                        st.rerun()
 
     with col_b:
-        if st.button("← Back"):
+        if st.button("← Back", key="back_to_profile"):
             go_to(3)
             st.rerun()
 
@@ -954,7 +639,7 @@ elif st.session_state.step == 5:
     <div class="step-header">
         <div class="step-eyebrow">Step 05 — Your Email</div>
         <div class="step-title"><em>Generated</em> Cold Email</div>
-        <div class="step-desc">Review, refine slightly, and send. Small personal edits always improve it.</div>
+        <div class="step-desc">Review, refine slightly, and send.</div>
     </div>""", unsafe_allow_html=True)
 
     # Scores
@@ -973,10 +658,10 @@ elif st.session_state.step == 5:
     # Email display
     st.markdown(f"""
     <div class="email-output">
-        <div class="email-bar">✉ Your Cold Email — {st.session_state.prof_name}</div>
-        <div class="email-body">{st.session_state.generated_email}</div>
+        <div class="email-bar">✉ Your Cold Email — {sanitize(st.session_state.prof_name)}</div>
+        <div class="email-body">{sanitize(st.session_state.generated_email)}</div>
         <div class="email-footer">
-        ⚠ AI-generated · Review before sending · Personal tweaks make it significantly better
+        ⚠ AI-generated · Review before sending
         </div>
     </div>""", unsafe_allow_html=True)
 
