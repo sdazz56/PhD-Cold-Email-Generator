@@ -215,8 +215,11 @@ if st.session_state.step == 0:
     </div>""", unsafe_allow_html=True)
 
     if st.button("✅ Verify & Start!", type="primary", use_container_width=True):
-        if not st.session_state.api_key.strip():
-            st.error("⚠️ Please enter your API key to continue.")
+        # Final sync and strip before verification
+        st.session_state.api_key = st.session_state.provider_keys.get(selected_provider, "").strip()
+        
+        if not st.session_state.api_key:
+            st.error(f"⚠️ Please enter your {selected_provider} API key to continue.")
         else:
             with st.spinner("Verifying connection... (usually 2-5 seconds)"):
                 try:

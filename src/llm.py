@@ -32,7 +32,7 @@ def get_model_mapping(model_name: str) -> str:
 def call_llm(prompt: str, max_tokens: int = 1500) -> str:
     """Unified LLM call using LiteLLM."""
     model_name = st.session_state.api_model
-    api_key = st.session_state.api_key
+    api_key = st.session_state.api_key.strip() # Strip any accidental whitespace
     
     if not api_key:
         st.error("❌ API key missing. Please set it in Step 0.")
@@ -41,28 +41,23 @@ def call_llm(prompt: str, max_tokens: int = 1500) -> str:
     target_model = get_model_mapping(model_name)
     
     try:
-        # Set API Key based on provider
-        if target_model.startswith("anthropic/"):
-            litellm.anthropic_key = api_key
-        elif target_model.startswith("gemini/"):
-            litellm.gemini_key = api_key
-        else:
-            litellm.api_key = api_key # Fallback for Deepseek/generic
-
+        # Pass api_key directly to completion() for better reliability
         response = litellm.completion(
             model=target_model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
+            api_key=api_key
         )
         return response.choices[0].message.content
 
     except Exception as e:
         err_msg = str(e).lower()
-        if "401" in err_msg or "invalid_api_key" in err_msg or "invalid key" in err_msg:
+        if "401" in err_msg or "invalid_api_key" in err_msg or "invalid key" in err_msg or "authentication" in err_msg:
             st.error("❌ Invalid API Key. Please check your key in Step 0.")
         elif "quota" in err_msg or "exhausted" in err_msg or "429" in err_msg:
             st.error("❌ Quota Exhausted. You've hit your API limit or billing issue.")
         elif "404" in err_msg or "not_found" in err_msg:
+            # Re-check mapping if 404
             st.error(f"❌ Model Not Found: The model `{target_model}` is not available for your API key or region.")
         else:
             st.error(f"❌ LLM Error: {str(e)}")
